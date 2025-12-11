@@ -19,8 +19,15 @@ PG_USER = os.getenv("PG_USER")
 PG_PASS = os.getenv("PG_PASS")
 PG_DB   = os.getenv("PG_DB")
 
-# Fecha mínima (desde cuándo traer info)
+# Fecha mínima (desde cuándo traer info de BYD)
 FECHA_INICIO = os.getenv("FECHA_INICIO", "2025-12-01T00:00:00")
+
+# Periodos fiscales que se van a limpiar y recargar
+# Ejemplo en .env: FISCAL_PERIODS_TO_RELOAD=12.2025,01.2026,02.2026
+FISCAL_PERIODS_TO_RELOAD = os.getenv("FISCAL_PERIODS_TO_RELOAD", "")
+FISCAL_PERIODS_LIST = [
+    p.strip() for p in FISCAL_PERIODS_TO_RELOAD.split(",") if p.strip()
+]
 
 # ========= CONFIG BYD =========
 base_url = (
@@ -58,7 +65,7 @@ ns = {
 
 # ========= EXTRACCIÓN =========
 def construir_url(skip: int = 0, top: int = 10000) -> str:
-    # Solo desde FECHA_INICIO (sin fecha fin)
+    # Solo desde FECHA_INICIO (sin fecha fin) por CPOSTDATE
     filtro = (
         f"(CPOSTDATE ge datetime'{FECHA_INICIO}') and "
         f"(CDSR_PROC_CATID ne 'CA_2')"
@@ -139,7 +146,7 @@ def extraer_ventas() -> pd.DataFrame:
         df_ventas_1[col] = pd.to_numeric(df_ventas_1[col], errors="coerce")
 
     # Etiqueta de periodo
-    df_ventas_1['periodo_data'] = 'Dic 1 en adelante'
+    df_ventas_1['periodo_data'] = 'Dic 2025 en adelante'
 
     # Cambiar signos
     print("🔄 Cambiando signo VENTAS_US y COSTO_US a negativos...")
@@ -162,7 +169,7 @@ def cargar_a_postgres(df_ventas_1: pd.DataFrame) -> None:
     df_ventas_1['Product']            = df_ventas_1['Product'].astype(str).str[:100]
 
     dtype_map = {
-        "Invoice_Date":       String(25),   # si luego lo cambias a timestamp, ajusta aquí
+        "Invoice_Date":       String(25),
         "Customer":           String(10),
         "City":               String(100),
         "Accounting_Period":  String(10),
@@ -188,20 +195,27 @@ def cargar_a_postgres(df_ventas_1: pd.DataFrame) -> None:
         table_exists = conn.dialect.has_table(conn, "sap_byd_ventas")
 
     with engine.begin() as conn:
-        if table_exists:
-            # Borrado lógico desde FECHA_INICIO
-            print(f"🧹 Eliminando registros desde {FECHA_INICIO} en sap_byd_ventas...")
-            delete_sql = text("""
-                DELETE FROM sap_byd_ventas
-                WHERE "Invoice_Date" >= :fecha_inicio
-            """)
-            result = conn.execute(delete_sql, {"fecha_inicio": FECHA_INICIO})
-            print(f"   Registros borrados: {result.rowcount}")
+        if table_exists and FISCAL_PERIODS_LIST:
+            print(f"🧹 Eliminando registros por FiscalMonthYear en sap_byd_ventas...")
+            print(f"   Periodos a borrar: {FISCAL_PERIODS_LIST}")
 
-            if_exists_mode = 'append'
+            # Construir lista de placeholders para IN
+            placeholders = ", ".join([f":p{i}" for i in range(len(FISCAL_PERIODS_LIST))])
+
+            delete_sql = text(f"""
+                DELETE FROM sap_byd_ventas
+                WHERE "FiscalMonthYear" IN ({placeholders})
+            """)
+
+            params = {f"p{i}": period for i, period in enumerate(FISCAL_PERIODS_LIST)}
+            result = conn.execute(delete_sql, params)
+            print(f"   Registros borrados: {result.rowcount}")
+        elif table_exists:
+            print("⚠️ La tabla existe pero no se definieron periodos en FISCAL_PERIODS_TO_RELOAD; no se borra nada.")
         else:
-            print("🆕 Primera carga: se crea la tabla")
-            if_exists_mode = 'fail'
+            print("🆕 Primera carga: se creará la tabla")
+
+        if_exists_mode = 'append' if table_exists else 'fail'
 
         # Carga
         df_ventas_1.to_sql(
