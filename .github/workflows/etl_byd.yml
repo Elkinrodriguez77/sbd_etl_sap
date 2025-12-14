@@ -1,7 +1,7 @@
-# .github/workflows/etl_byd.yml
 name: ETL BYD Ventas
 
 on:
+  # Ejecución automática (horario en UTC)
   schedule:
     # 12:00 pm Colombia (UTC-5) -> 17:00 UTC, lunes a sábado
     - cron: '0 17 * * 1-6'
@@ -10,6 +10,7 @@ on:
     # 7:00 pm Colombia -> 00:00 UTC, martes a domingo (equivale a lun-sáb en COL)
     - cron: '0 0 * * 2-7'
 
+  # Ejecución manual desde la pestaña Actions
   workflow_dispatch:
 
 jobs:
