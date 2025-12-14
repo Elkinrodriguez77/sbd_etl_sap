@@ -2,35 +2,33 @@ name: ETL BYD Ventas
 
 on:
   schedule:
-    # 12:00 pm Colombia (UTC-5) -> 17:00 UTC, lunes a sábado
-    - cron: '0 17 * * 1-6'
-    # 2:30 pm Colombia -> 19:30 UTC, lunes a sábado
-    - cron: '30 19 * * 1-6'
-    # 7:00 pm Colombia -> 00:00 UTC, martes a domingo (equivale a lun-sáb en COL)
-    # En vez de 2-7 usamos la lista 2,3,4,5,6,7
-    - cron: '0 0 * * 2,3,4,5,6,7'
-
-  workflow_dispatch:
+    # 12:00 pm Colombia (UTC-5) -> 17:00 UTC, todos los días
+    - cron: '0 17 * * *'
+    # 2:30 pm Colombia -> 19:30 UTC, todos los días
+    - cron: '30 19 * * *'
+    # 7:00 pm Colombia -> 00:00 UTC del día siguiente, todos los días
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # Permite ejecutarlo manualmente desde GitHub
 
 jobs:
   run-etl:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Clonar el repositorio
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run ETL script
+      - name: Ejecutar ETL BYD
         env:
           BJD_USER: ${{ secrets.BJD_USER }}
           BJD_PASS: ${{ secrets.BJD_PASS }}
