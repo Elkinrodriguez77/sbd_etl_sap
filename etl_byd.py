@@ -29,7 +29,7 @@ FISCAL_PERIODS_LIST = [
     p.strip() for p in FISCAL_PERIODS_TO_RELOAD.split(",") if p.strip()
 ]
 
-# ========= CONFIG BYD =========
+# ========= CONFIG BYD VENTAS =========
 base_url = (
     "https://my336154.sapbydesign.com/sap/byd/odata/"
     "cc_home_analytics.svc/"
@@ -63,9 +63,13 @@ ns = {
     "d": "http://schemas.microsoft.com/ado/2007/08/dataservices",
 }
 
-# ========= EXTRACCIÓN =========
+# ========= FUNCIONES GENERALES =========
+def get_engine():
+    conn_str = f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{PG_DB}"
+    return create_engine(conn_str, pool_pre_ping=True, pool_recycle=300)
+
+# ========= EXTRACCIÓN VENTAS (igual que antes) =========
 def construir_url(skip: int = 0, top: int = 10000) -> str:
-    # Solo desde FECHA_INICIO (sin fecha fin) por CPOSTDATE
     filtro = (
         f"(CPOSTDATE ge datetime'{FECHA_INICIO}') and "
         f"(CDSR_PROC_CATID ne 'CA_2')"
@@ -145,10 +149,8 @@ def extraer_ventas() -> pd.DataFrame:
     for col in ["VENTAS_US", "COSTO_US", "Cantidad_FacUS"]:
         df_ventas_1[col] = pd.to_numeric(df_ventas_1[col], errors="coerce")
 
-    # Etiqueta de periodo
     df_ventas_1['periodo_data'] = 'Dic 2025 en adelante'
 
-    # Cambiar signos
     print("🔄 Cambiando signo VENTAS_US y COSTO_US a negativos...")
     df_ventas_1['VENTAS_US'] = df_ventas_1['VENTAS_US'] * -1
     df_ventas_1['COSTO_US']   = df_ventas_1['COSTO_US'] * -1
@@ -156,12 +158,9 @@ def extraer_ventas() -> pd.DataFrame:
     print(f"\nTotal de registros obtenidos: {len(df_ventas_1)}")
     return df_ventas_1
 
-# ========= CARGA A POSTGRES =========
 def cargar_a_postgres(df_ventas_1: pd.DataFrame) -> None:
-    connection_string = f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{PG_DB}"
-    engine = create_engine(connection_string, pool_pre_ping=True, pool_recycle=300)
+    engine = get_engine()
 
-    # Ajuste de longitudes
     df_ventas_1['Ship_To']            = df_ventas_1['Ship_To'].astype(str).str[:60]
     df_ventas_1['Customer_Name']      = df_ventas_1['Customer_Name'].astype(str).str[:50]
     df_ventas_1['Person_Responsible'] = df_ventas_1['Person_Responsible'].astype(str).str[:50]
@@ -190,16 +189,14 @@ def cargar_a_postgres(df_ventas_1: pd.DataFrame) -> None:
         "periodo_data":       String(50)
     }
 
-    # Verificar existencia de tabla
     with engine.connect() as conn:
         table_exists = conn.dialect.has_table(conn, "sap_byd_ventas")
 
     with engine.begin() as conn:
         if table_exists and FISCAL_PERIODS_LIST:
-            print(f"🧹 Eliminando registros por FiscalMonthYear en sap_byd_ventas...")
+            print("🧹 Eliminando registros por FiscalMonthYear en sap_byd_ventas...")
             print(f"   Periodos a borrar: {FISCAL_PERIODS_LIST}")
 
-            # Construir lista de placeholders para IN
             placeholders = ", ".join([f":p{i}" for i in range(len(FISCAL_PERIODS_LIST))])
 
             delete_sql = text(f"""
@@ -217,7 +214,6 @@ def cargar_a_postgres(df_ventas_1: pd.DataFrame) -> None:
 
         if_exists_mode = 'append' if table_exists else 'fail'
 
-        # Carga
         df_ventas_1.to_sql(
             name='sap_byd_ventas',
             con=conn,
@@ -228,14 +224,157 @@ def cargar_a_postgres(df_ventas_1: pd.DataFrame) -> None:
             chunksize=1000
         )
 
-    print(f"✅ Cargados {len(df_ventas_1)} registros de este rango de fechas")
+    print(f"✅ Cargados {len(df_ventas_1)} registros de ventas")
     engine.dispose()
-    print("🔌 Conexión cerrada")
+    print("🔌 Conexión cerrada (ventas)")
+
+# ========= ODATA ORDENES =========
+ODATA_ORDENES_URL = (
+    "https://my336154.sapbydesign.com/sap/byd/odata/"
+    "cc_home_analytics.svc/"
+    "RPZA64281B20A8D0329C26607QueryResults"
+    "?$select=CBP_INT_ID,TBP_INT_ID,CYPCJYMI4Y_ZBRAND,"
+    "CIPY_BUY_CTYNM_N,CIPY_PRD_REC_ADR_CITY,TDBA_DISTRCHN_CD,"
+    "CZCE03SBUDES,CIPY_EMP_RSP_PTY,TIPY_EMP_RSP_PTY,"
+    "CFISCALDDATES6F44DC8D81C7C41F,CIPR_PRODUCT,TIPR_PRODUCT,"
+    "CDOC_ID,CITM_UUID,TITM_UUID,CIPY_PRD_REC_PTY,TIPY_PRD_REC_PTY,"
+    "TIPY_BUY_REGCD_N,KCIAV_INV_AMT_RC,KCZE2B935894219245A1E8E77,"
+    "KCZB8AFD00C36F845A6715442,KCZA9D6BCB37DDC4CFD5A793B,"
+    "KCZF90BF9555FB749DF9AC0DD,KCZB6013F9BB1AA840E860741,"
+    "KCZ99DCD133A13F9D1408CD69,KCZF14889264B14B86AC3BFDE,"
+    "KCZ5F74283906DBF4CD07A5CA,KCZFA7C12055DC98403D10CAA,"
+    "KCZC4CE47BAD42C81EA5B0D0F,KCZ998098F004AB32E2511CF5,"
+    "KCZ95857413FCAF0B77113DCF"
+    "&$filter=(CFISCALDDATES6F44DC8D81C7C41F ge '2025-01') "
+    "and (CDOC_CREATED_DT ge datetime'2025-01-01T00:00:00')"
+    "&$top=15000"
+)
+
+def extraer_ordenes() -> pd.DataFrame:
+    print("Extrayendo OData de órdenes...")
+    resp = requests.get(ODATA_ORDENES_URL, auth=(BJD_USER, BJD_PASS), timeout=300)
+    resp.raise_for_status()
+
+    df = pd.read_xml(
+        resp.content,
+        xpath=".//atom:entry/atom:content/m:properties",
+        namespaces=ns
+    )
+
+    rename_map = {
+        "CBP_INT_ID": "Customer",
+        "TBP_INT_ID": "Account Name",
+        "CYPCJYMI4Y_ZBRAND": "Brand",
+        "CDOC_ID": "Sales Order",
+        "TITM_UUID": "Sales Order Item",
+        "TIPY_PRD_REC_PTY": "Ship-To",
+        "CIPY_PRD_REC_ADR_CITY": "City of Ship-to",
+        "CFISCALDDATES6F44DC8D81C7C41F": "FiscalMonthYear",
+        "KCZ5F74283906DBF4CD07A5CA": "Valor Confirinv",
+        "KCZFA7C12055DC98403D10CAA": "Valor OrdAbiertas (Con Inv)",
+        "KCZ95857413FCAF0B77113DCF": "Valor Solicitado",
+        "KCZ99DCD133A13F9D1408CD69": "Qty Solicitada",
+        "KCZA9D6BCB37DDC4CFD5A793B": "Qty Confirinv",
+        "KCZF90BF9555FB749DF9AC0DD": "Qty En Preparacion",
+        "KCZE2B935894219245A1E8E77": "Qty BO",
+        "KCIAV_INV_AMT_RC": "Invoiced Amount",
+        "KCZF14889264B14B86AC3BFDE": "Valor BO",
+        "TIPY_BUY_REGCD_N": "State",
+        "CIPY_BUY_CTYNM_N": "City of Ship-to1",
+        "CIPR_PRODUCT": "Product",
+        "CIPY_PRD_REC_PTY": "Ship-To ID",
+        "KCZC4CE47BAD42C81EA5B0D0F": "Valor Preparacion",
+        "KCZB8AFD00C36F845A6715442": "Valor Confirmado",
+        "KCZ998098F004AB32E2511CF5": "Qty Confirmada",
+        "KCZB6013F9BB1AA840E860741": "Qty Facturada",
+    }
+    df = df.rename(columns=rename_map)
+
+    # Si en el futuro quieres dejar solo el subset de columnas, se puede hacer aquí.
+    print(f"Órdenes: {len(df)} filas extraídas")
+    return df
+
+def cargar_ordenes(df: pd.DataFrame) -> None:
+    engine = get_engine()
+    with engine.begin() as conn:
+        df.to_sql(
+            name="sap_byd_ordenes",
+            con=conn,
+            if_exists="replace",   # siempre reemplaza
+            index=False,
+            method="multi",
+            chunksize=1000
+        )
+    engine.dispose()
+    print(f"✅ Órdenes cargadas en sap_byd_ordenes ({len(df)} filas)")
+
+# ========= ODATA COSTO PRODUCTO =========
+ODATA_COSTO_URL = (
+    "https://my336154.sapbydesign.com/sap/byd/odata/"
+    "cc_home_analytics.svc/"
+    "RPZ2A3214DFBC04E0DEE943B3QueryResults"
+    "?$select=CMATERIAL,TMATERIAL,CPERMEST,TPERMEST,CSETOFBKS,FCVALPCOMP"
+    "&$filter=CPERMEST eq '250' and CSETOFBKS eq 'ZC01'"
+    "&$top=18000"
+)
+
+def extraer_costo_producto() -> pd.DataFrame:
+    print("Extrayendo OData de costo_producto...")
+    resp = requests.get(ODATA_COSTO_URL, auth=(BJD_USER, BJD_PASS), timeout=300)
+    resp.raise_for_status()
+
+    df = pd.read_xml(
+        resp.content,
+        xpath=".//atom:entry/atom:content/m:properties",
+        namespaces=ns
+    )
+
+    # Reordenar / seleccionar columnas como en M
+    cols = ["CMATERIAL", "TMATERIAL", "CPERMEST", "TPERMEST", "FCVALPCOMP"]
+    df = df[cols]
+
+    rename_map = {
+        "CMATERIAL": "Material"
+        # el resto de columnas se dejan con el mismo nombre
+    }
+    df = df.rename(columns=rename_map)
+
+    print(f"Costo producto: {len(df)} filas extraídas")
+    return df
+
+def cargar_costo_producto(df: pd.DataFrame) -> None:
+    engine = get_engine()
+    with engine.begin() as conn:
+        df.to_sql(
+            name="sap_byd_costo_producto",
+            con=conn,
+            if_exists="replace",   # siempre reemplaza
+            index=False,
+            method="multi",
+            chunksize=1000
+        )
+    engine.dispose()
+    print(f"✅ Costo producto cargado en sap_byd_costo_producto ({len(df)} filas)")
 
 # ========= MAIN =========
 if __name__ == "__main__":
-    df = extraer_ventas()
-    if not df.empty:
-        cargar_a_postgres(df)
+    # 1) Ventas (como estaba)
+    df_ventas = extraer_ventas()
+    if not df_ventas.empty:
+        cargar_a_postgres(df_ventas)
     else:
-        print("⚠️ No se encontraron datos para cargar.")
+        print("⚠️ No se encontraron datos de ventas para cargar.")
+
+    # 2) Órdenes
+    df_ordenes = extraer_ordenes()
+    if not df_ordenes.empty:
+        cargar_ordenes(df_ordenes)
+    else:
+        print("⚠️ OData de órdenes sin datos.")
+
+    # 3) Costo producto
+    df_costo = extraer_costo_producto()
+    if not df_costo.empty:
+        cargar_costo_producto(df_costo)
+    else:
+        print("⚠️ OData de costo producto sin datos.")
