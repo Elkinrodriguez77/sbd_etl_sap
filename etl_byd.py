@@ -20,7 +20,7 @@ PG_PASS = os.getenv("PG_PASS")
 PG_DB   = os.getenv("PG_DB")
 
 # Fecha mínima (desde cuándo traer info de BYD)
-FECHA_INICIO = os.getenv("FECHA_INICIO", "2025-12-01T00:00:00")
+FECHA_INICIO = os.getenv("FECHA_INICIO", "2026-01-01T00:00:00")
 
 # Periodos fiscales que se van a limpiar y recargar
 # Ejemplo en .env: FISCAL_PERIODS_TO_RELOAD=12.2025,01.2026,02.2026
