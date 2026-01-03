@@ -146,6 +146,12 @@ def extraer_ventas() -> pd.DataFrame:
 
     df_ventas_1 = pd.concat(all_batches, ignore_index=True) if all_batches else pd.DataFrame()
 
+    # === BLOQUE NUEVO ===
+    if df_ventas_1.empty:
+        print("⚠️ No hay datos en este rango. Retornando DataFrame vacío.")
+        return df_ventas_1
+    # ==========================
+
     for col in ["VENTAS_US", "COSTO_US", "Cantidad_FacUS"]:
         df_ventas_1[col] = pd.to_numeric(df_ventas_1[col], errors="coerce")
 
