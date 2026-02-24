@@ -43,25 +43,27 @@ def _calcular_ventana_auto() -> tuple[str, str, list[str]]:
     hoy = datetime.now()
     mes_actual = hoy.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     mes_anterior = mes_actual - relativedelta(months=1)
-    mes_siguiente = mes_actual + relativedelta(months=1)
 
     fecha_inicio = mes_anterior.strftime("%Y-%m-%dT00:00:00")
-    fecha_fin = mes_siguiente.strftime("%Y-%m-%dT00:00:00")  # para filter lt
+    # Formato YYYY-MM para filtro fiscal (SAP no soporta bien datetime lt en OData)
+    fiscal_fin = mes_actual.strftime("%Y-%m")
 
-    # Formato MM.YYYY para FiscalMonthYear
+    # Formato MM.YYYY para FiscalMonthYear (delete/insert en PG)
     periodos = [
         mes_anterior.strftime("%m.%Y"),
         mes_actual.strftime("%m.%Y"),
     ]
 
-    return fecha_inicio, fecha_fin, periodos
+    return fecha_inicio, fiscal_fin, periodos
 
 
 if MODO_AUTO:
-    FECHA_INICIO, FECHA_FIN, FISCAL_PERIODS_LIST = _calcular_ventana_auto()
+    FECHA_INICIO, FISCAL_FIN, FISCAL_PERIODS_LIST = _calcular_ventana_auto()
+    FECHA_FIN = ""  # no usamos datetime lt (causa 400 en SAP)
     print(f"📅 Modo auto: mes actual + anterior → {FISCAL_PERIODS_LIST}")
 else:
-    FECHA_FIN = ""  # sin límite si modo manual
+    FECHA_FIN = ""
+    FISCAL_FIN = ""  # sin límite fiscal si modo manual
 
 # ========= CONFIG BYD VENTAS =========
 base_url = (
@@ -108,8 +110,9 @@ def construir_url(skip: int = 0, top: int = 10000) -> str:
         f"(CPOSTDATE ge datetime'{FECHA_INICIO}') and "
         f"(CDSR_PROC_CATID ne 'CA_2')"
     )
-    if FECHA_FIN:
-        filtro += f" and (CPOSTDATE lt datetime'{FECHA_FIN}')"
+    # SAP ByDesign da 400 con datetime lt; usamos campo fiscal (Date) en su lugar
+    if FISCAL_FIN:
+        filtro += f" and (CFISCALDDATES6F44DC8D81C7C41F le '{FISCAL_FIN}')"
 
     url = (
         f"{base_url}"
@@ -160,7 +163,7 @@ def extraer_ventas() -> pd.DataFrame:
     skip = 0
     batch_size = 10000
 
-    rango = f"{FECHA_INICIO} hasta {FECHA_FIN}" if FECHA_FIN else f"{FECHA_INICIO} (sin fecha fin)"
+    rango = f"{FECHA_INICIO} hasta FiscalMonthYear<={FISCAL_FIN}" if FISCAL_FIN else f"{FECHA_INICIO} (sin límite fiscal)"
     print(f"Extrayendo rango: {rango}")
 
     while True:
