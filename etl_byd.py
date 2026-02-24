@@ -1,6 +1,8 @@
 # etl_byd.py
 from dotenv import load_dotenv
 import os
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
 import requests
 import pandas as pd
 from lxml import etree
@@ -19,15 +21,47 @@ PG_USER = os.getenv("PG_USER")
 PG_PASS = os.getenv("PG_PASS")
 PG_DB   = os.getenv("PG_DB")
 
-# Fecha mínima (desde cuándo traer info de BYD)
+# Modo automático: calcula mes actual + mes anterior. Si false, usa FECHA_INICIO y FISCAL_PERIODS_TO_RELOAD
+MODO_AUTO = os.getenv("MODO_AUTO", "true").lower() in ("true", "1", "yes")
+
+# Fecha mínima (desde cuándo traer info de BYD) - solo si MODO_AUTO=false
 FECHA_INICIO = os.getenv("FECHA_INICIO", "2026-01-01T00:00:00")
 
-# Periodos fiscales que se van a limpiar y recargar
+# Periodos fiscales que se van a limpiar y recargar - solo si MODO_AUTO=false
 # Ejemplo en .env: FISCAL_PERIODS_TO_RELOAD=12.2025,01.2026,02.2026
 FISCAL_PERIODS_TO_RELOAD = os.getenv("FISCAL_PERIODS_TO_RELOAD", "")
 FISCAL_PERIODS_LIST = [
     p.strip() for p in FISCAL_PERIODS_TO_RELOAD.split(",") if p.strip()
 ]
+
+
+def _calcular_ventana_auto() -> tuple[str, str, list[str]]:
+    """
+    Calcula FECHA_INICIO, FECHA_FIN y periodos fiscales para mes actual + mes anterior.
+    El histórico anterior queda intacto.
+    """
+    hoy = datetime.now()
+    mes_actual = hoy.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    mes_anterior = mes_actual - relativedelta(months=1)
+    mes_siguiente = mes_actual + relativedelta(months=1)
+
+    fecha_inicio = mes_anterior.strftime("%Y-%m-%dT00:00:00")
+    fecha_fin = mes_siguiente.strftime("%Y-%m-%dT00:00:00")  # para filter lt
+
+    # Formato MM.YYYY para FiscalMonthYear
+    periodos = [
+        mes_anterior.strftime("%m.%Y"),
+        mes_actual.strftime("%m.%Y"),
+    ]
+
+    return fecha_inicio, fecha_fin, periodos
+
+
+if MODO_AUTO:
+    FECHA_INICIO, FECHA_FIN, FISCAL_PERIODS_LIST = _calcular_ventana_auto()
+    print(f"📅 Modo auto: mes actual + anterior → {FISCAL_PERIODS_LIST}")
+else:
+    FECHA_FIN = ""  # sin límite si modo manual
 
 # ========= CONFIG BYD VENTAS =========
 base_url = (
@@ -74,6 +108,8 @@ def construir_url(skip: int = 0, top: int = 10000) -> str:
         f"(CPOSTDATE ge datetime'{FECHA_INICIO}') and "
         f"(CDSR_PROC_CATID ne 'CA_2')"
     )
+    if FECHA_FIN:
+        filtro += f" and (CPOSTDATE lt datetime'{FECHA_FIN}')"
 
     url = (
         f"{base_url}"
@@ -124,7 +160,8 @@ def extraer_ventas() -> pd.DataFrame:
     skip = 0
     batch_size = 10000
 
-    print(f"Extrayendo rango desde: {FECHA_INICIO} (sin fecha fin)...")
+    rango = f"{FECHA_INICIO} hasta {FECHA_FIN}" if FECHA_FIN else f"{FECHA_INICIO} (sin fecha fin)"
+    print(f"Extrayendo rango: {rango}")
 
     while True:
         print(f"Página {skip//batch_size + 1} (skip={skip})...")

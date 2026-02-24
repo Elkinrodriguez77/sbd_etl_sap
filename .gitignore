@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 *.pyd
 .env.*
+!.env.example
 .vscode/
 .idea/
 .sbd/

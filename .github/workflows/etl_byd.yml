@@ -37,7 +37,6 @@ jobs:
           PG_USER:  ${{ secrets.PG_USER }}
           PG_PASS:  ${{ secrets.PG_PASS }}
           PG_DB:    ${{ secrets.PG_DB }}
-          FECHA_INICIO: ${{ secrets.FECHA_INICIO }}
-          FISCAL_PERIODS_TO_RELOAD: ${{ secrets.FISCAL_PERIODS_TO_RELOAD }}
+          MODO_AUTO: "true"
         run: |
           python etl_byd.py
