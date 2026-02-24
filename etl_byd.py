@@ -423,6 +423,94 @@ def cargar_costo_producto(df: pd.DataFrame) -> None:
     engine.dispose()
     print(f"✅ Costo producto cargado en sap_byd_costo_producto ({len(df)} filas)")
 
+
+## nuevos requerimientos para data Jaime ======
+
+# ========= ODATA 3PL Y ENTREGA DE MERCANCÍA =========
+
+URL_BASE_3PL = (
+    "https://my336154.sapbydesign.com/sap/byd/odata/"
+    "cc_home_analytics.svc/"
+    "RPZ8FD31E1E09C6489CFC1FE8QueryResults"
+)
+SELECT_3PL = "CRELEASE_STATUS,TRELEASE_STATUS,CBUSINEERENCEF1ACB9534604A4D9,CRELEASERENCE79EA4F7FDF174CDF,CSTATUSERENCE8E2BEDA58262A7C0,TSTATUSERENCE8E2BEDA58262A7C0,CIDCONTERENCEFD3F50267033877F,CPRODUCERENCE961D56D7A61936A0,KCREQUESERENCEE7C71585BF4BFCEE,CBUSINEERENCEBC7B6311A522DAAC"
+FILTER_3PL = "(CBUSINEERENCEBC7B6311A522DAAC eq '114') and (CRELEASERENCE79EA4F7FDF174CDF ge datetime'2025-12-01T00:00:00')"
+
+
+URL_BASE_ENTREGA = (
+    "https://my336154.sapbydesign.com/sap/byd/odata/"
+    "cc_home_analytics.svc/"
+    "RPZ4E72B90D164D5C8BA4A7E9QueryResults"
+)
+SELECT_ENTREGA = "CID_TRANSPORTADORA_01,CID_UBICACION_01,CID_VERIFICACION_01,CID_VEHICULO_01,CID_FECHAPRIMERACITA,CID_CAJAS_01,CID_CITAS_ADICIONAL_01,CID_CITAS_01,CID_CONDUCTOR_01,CID_CSAP_01,CID_CUMPLIMIENTO_01,CID_DIAS_ENTREGA_01,CID_DIAS_SBD_01,CID_ENTREGA_01,CID_ESTADO_01,CID_FE_01,CID_FECHA_ENTREGA_01,CID_FECHATRANSDESTINO,CID_FGUIA_01,CID_GUIA_01,CID_HORA_ENTREGA_01,CID_HUACALES_01,CID_INDICADOR_01,CID_MENTREGA_01,CID_MOTIVOATRASO,CID_NOMBRE_ENTREGA_01,CID_NOMBRE_RECIBE_01,CID_NOVEDAD_01,CIBR_SLO_UUID,CID_PLACAS_01,CID_PROM_SERVICIO_01,CID_RCSAP_01,CDOC_INV_DATE"
+FILTER_ENTREGA = "(CDOC_INV_DATE ge datetime'2025-12-01T00:00:00')"
+
+
+def extraer_odata_paginado(nombre_proceso: str, url_base: str, select: str, filter_str: str, batch_size: int = 5000) -> pd.DataFrame:
+    """
+    Función genérica para extraer todos los registros de SAP ByD paginando de a batch_size.
+    """
+    print(f"\nExtrayendo OData paginado: {nombre_proceso}...")
+    all_batches = []
+    skip = 0
+
+    while True:
+        
+        url = f"{url_base}?$select={select}&$filter={filter_str}&$top={batch_size}&$skip={skip}"
+        print(f"  -> Obteniendo batch (skip={skip})...")
+        
+        resp = requests.get(url, auth=(BJD_USER, BJD_PASS), timeout=300)
+        resp.raise_for_status()
+
+        try:
+        
+            df_batch = pd.read_xml(
+                resp.content,
+                xpath=".//atom:entry/atom:content/m:properties",
+                namespaces=ns
+            )
+        except ValueError:
+            print("  Sin más datos (fin de la lectura XML).")
+            break
+
+        if df_batch.empty:
+            break
+
+        all_batches.append(df_batch)
+        print(f"     {len(df_batch)} filas en este batch.")
+
+      
+        if len(df_batch) < batch_size:
+            break
+            
+        skip += batch_size
+
+    if all_batches:
+        df_final = pd.concat(all_batches, ignore_index=True)
+        print(f"✅ Total extraído para {nombre_proceso}: {len(df_final)} filas")
+        return df_final
+    else:
+        print(f"⚠️ No se encontraron datos para {nombre_proceso}.")
+        return pd.DataFrame()
+
+def cargar_tabla_simple(df: pd.DataFrame, nombre_tabla: str) -> None:
+    """
+    Carga un DataFrame directamente a una tabla nueva en PostgreSQL (Reemplaza la existente).
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        df.to_sql(
+            name=nombre_tabla,
+            con=conn,
+            if_exists="replace",  # Crea la tabla desde cero cada vez
+            index=False,
+            method="multi",
+            chunksize=1000
+        )
+    engine.dispose()
+    print(f"✅ Datos cargados en PostgreSQL -> Tabla: {nombre_tabla} ({len(df)} filas)")
+
+
 # ========= MAIN =========
 if __name__ == "__main__":
     # 1) Ventas (como estaba)
@@ -445,3 +533,19 @@ if __name__ == "__main__":
         cargar_costo_producto(df_costo)
     else:
         print("⚠️ OData de costo producto sin datos.")
+
+    # ================= NUEVO: 3PL y Entrega de Mercancía =================
+    
+    # 4) 3PL
+    df_3pl = extraer_odata_paginado("3PL", URL_BASE_3PL, SELECT_3PL, FILTER_3PL)
+    if not df_3pl.empty:
+        cargar_tabla_simple(df_3pl, "sap_byd_3pl")
+    else:
+        print("⚠️ OData de 3PL sin datos.")
+
+    # 5) Entrega de Mercancía
+    df_entrega = extraer_odata_paginado("Entrega de Mercancía", URL_BASE_ENTREGA, SELECT_ENTREGA, FILTER_ENTREGA)
+    if not df_entrega.empty:
+        cargar_tabla_simple(df_entrega, "sap_byd_entrega_mercancia")
+    else:
+        print("⚠️ OData de Entrega de Mercancía sin datos.")
