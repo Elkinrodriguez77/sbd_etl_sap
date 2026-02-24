@@ -45,25 +45,35 @@ def _calcular_ventana_auto() -> tuple[str, str, list[str]]:
     mes_anterior = mes_actual - relativedelta(months=1)
 
     fecha_inicio = mes_anterior.strftime("%Y-%m-%dT00:00:00")
-    # Formato YYYY-MM para filtro fiscal (SAP no soporta bien datetime lt en OData)
-    fiscal_fin = mes_actual.strftime("%Y-%m")
+    # Formato MM.YYYY para filtro fiscal (igual que FISCAL_PERIODS_TO_RELOAD)
+    fiscal_fin = mes_actual.strftime("%m.%Y")
 
     # Formato MM.YYYY para FiscalMonthYear (delete/insert en PG)
-    periodos = [
+    periodos_mm_yyyy = [
         mes_anterior.strftime("%m.%Y"),
         mes_actual.strftime("%m.%Y"),
     ]
-
-    return fecha_inicio, fiscal_fin, periodos
+    # SAP puede devolver YYYY-MM; incluir ambos para DELETE seguro
+    periodos_yyyy_mm = [
+        mes_anterior.strftime("%Y-%m"),
+        mes_actual.strftime("%Y-%m"),
+    ]
+    return fecha_inicio, fiscal_fin, periodos_mm_yyyy, periodos_yyyy_mm
 
 
 if MODO_AUTO:
-    FECHA_INICIO, FISCAL_FIN, FISCAL_PERIODS_LIST = _calcular_ventana_auto()
+    FECHA_INICIO, FISCAL_FIN, FISCAL_PERIODS_LIST, FISCAL_PERIODS_ALT = _calcular_ventana_auto()
     FECHA_FIN = ""  # no usamos datetime lt (causa 400 en SAP)
     print(f"📅 Modo auto: mes actual + anterior → {FISCAL_PERIODS_LIST}")
 else:
     FECHA_FIN = ""
-    FISCAL_FIN = ""  # sin límite fiscal si modo manual
+    FISCAL_FIN = ""
+    # En modo manual, generar formato alternativo para DELETE (MM.YYYY -> YYYY-MM)
+    FISCAL_PERIODS_ALT = []
+    for p in FISCAL_PERIODS_LIST:
+        parts = p.split(".")
+        if len(parts) == 2:
+            FISCAL_PERIODS_ALT.append(f"{parts[1]}-{parts[0]}")  # YYYY-MM
 
 # ========= CONFIG BYD VENTAS =========
 base_url = (
@@ -186,7 +196,18 @@ def extraer_ventas() -> pd.DataFrame:
 
     df_ventas_1 = pd.concat(all_batches, ignore_index=True) if all_batches else pd.DataFrame()
 
-    # === BLOQUE NUEVO ===
+    if not df_ventas_1.empty:
+        sample_fiscal = df_ventas_1["FiscalMonthYear"].dropna().unique()[:5].tolist()
+        print(f"   Periodos en respuesta API (muestra): {sample_fiscal}")
+
+    # Filtrar solo periodos objetivo (SAP puede devolver formatos distintos)
+    if not df_ventas_1.empty and (FISCAL_PERIODS_LIST or FISCAL_PERIODS_ALT):
+        periodos_validos = set(FISCAL_PERIODS_LIST + FISCAL_PERIODS_ALT)
+        antes = len(df_ventas_1)
+        df_ventas_1 = df_ventas_1[df_ventas_1["FiscalMonthYear"].astype(str).str.strip().isin(periodos_validos)]
+        if len(df_ventas_1) < antes:
+            print(f"   Filtro periodo: {antes} → {len(df_ventas_1)} filas (solo {list(periodos_validos)})")
+
     if df_ventas_1.empty:
         print("⚠️ No hay datos en este rango. Retornando DataFrame vacío.")
         return df_ventas_1
@@ -239,18 +260,18 @@ def cargar_a_postgres(df_ventas_1: pd.DataFrame) -> None:
         table_exists = conn.dialect.has_table(conn, "sap_byd_ventas")
 
     with engine.begin() as conn:
-        if table_exists and FISCAL_PERIODS_LIST:
+        if table_exists and (FISCAL_PERIODS_LIST or FISCAL_PERIODS_ALT):
+            # SAP puede guardar MM.YYYY o YYYY-MM; borrar ambos formatos
+            periodos_borrar = list(dict.fromkeys(FISCAL_PERIODS_LIST + FISCAL_PERIODS_ALT))
             print("🧹 Eliminando registros por FiscalMonthYear en sap_byd_ventas...")
-            print(f"   Periodos a borrar: {FISCAL_PERIODS_LIST}")
+            print(f"   Periodos a borrar (formatos MM.YYYY y YYYY-MM): {periodos_borrar}")
 
-            placeholders = ", ".join([f":p{i}" for i in range(len(FISCAL_PERIODS_LIST))])
-
+            placeholders = ", ".join([f":p{i}" for i in range(len(periodos_borrar))])
             delete_sql = text(f"""
                 DELETE FROM sap_byd_ventas
                 WHERE "FiscalMonthYear" IN ({placeholders})
             """)
-
-            params = {f"p{i}": period for i, period in enumerate(FISCAL_PERIODS_LIST)}
+            params = {f"p{i}": p for i, p in enumerate(periodos_borrar)}
             result = conn.execute(delete_sql, params)
             print(f"   Registros borrados: {result.rowcount}")
         elif table_exists:

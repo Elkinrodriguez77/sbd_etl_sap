@@ -55,9 +55,11 @@ Todas las fuentes son servicios **OData** expuestos por SAP Business ByDesign:
 - Truncado de textos para cumplir límites de columnas en PostgreSQL
 
 **Estrategia incremental:**
-- Se eliminan los registros de los periodos fiscales a recargar
+- Se eliminan los registros de los periodos fiscales a recargar (soporta formatos `MM.YYYY` y `YYYY-MM` por compatibilidad con SAP)
 - Se insertan los datos nuevos del mismo rango
 - El resto del histórico permanece intacto
+
+**Nota técnica:** SAP ByDesign devuelve 400 con filtros `datetime lt` en OData. Por eso se usa el campo fiscal `CFISCALDDATES` (formato `MM.YYYY`) para limitar el rango en lugar de fecha fin.
 
 ---
 
@@ -114,12 +116,12 @@ Con `MODO_AUTO=true` (por defecto):
 
 ### Modo manual
 
-Con `MODO_AUTO=false` se usan las variables:
+Con `MODO_AUTO=false` se usan las variables de `.env`:
 
-- `FECHA_INICIO` — Fecha mínima para el filtro de facturación
-- `FISCAL_PERIODS_TO_RELOAD` — Periodos fiscales a borrar y recargar (formato `MM.YYYY`, separados por comas)
+- `FECHA_INICIO` — Fecha mínima para el filtro de facturación (ej: `2026-01-01T00:00:00`)
+- `FISCAL_PERIODS_TO_RELOAD` — Periodos fiscales a borrar y recargar (formato `MM.YYYY`, separados por comas, ej: `01.2026,02.2026`)
 
-Útil para cargas puntuales o recargas históricas específicas.
+En modo manual no se aplica filtro de fecha fin en la API; se trae todo desde `FECHA_INICIO` en adelante. Útil para cargas puntuales o recargas históricas específicas.
 
 ---
 
@@ -136,7 +138,9 @@ Las variables se definen en `.env` (no se sube a git). Usa `.env.example` como p
 | `PG_USER` | Usuario de base de datos |
 | `PG_PASS` | Contraseña de base de datos |
 | `PG_DB` | Nombre de la base de datos |
-| `MODO_AUTO` | `true` (automático) o `false` (manual) |
+| `MODO_AUTO` | `true` (automático, recomendado) o `false` (manual) |
+| `FECHA_INICIO` | Solo si `MODO_AUTO=false`. Fecha mínima (ej: `2026-01-01T00:00:00`) |
+| `FISCAL_PERIODS_TO_RELOAD` | Solo si `MODO_AUTO=false`. Periodos a recargar (ej: `01.2026,02.2026`) |
 
 ---
 
@@ -153,7 +157,7 @@ python etl_byd.py
 
 ### GitHub Actions
 
-El workflow `.github/workflows/etl_byd.yml` ejecuta el ETL según un cron (varias veces al día) y mediante `workflow_dispatch`. Las credenciales se configuran como secrets del repositorio.
+El workflow `.github/workflows/etl_byd.yml` ejecuta el ETL según un cron (varias veces al día) y mediante `workflow_dispatch`. Usa `MODO_AUTO=true` por defecto; las credenciales (BJD_USER, BJD_PASS, PG_*) se configuran como secrets del repositorio. No se requieren secrets para `FECHA_INICIO` ni `FISCAL_PERIODS_TO_RELOAD`.
 
 ---
 
