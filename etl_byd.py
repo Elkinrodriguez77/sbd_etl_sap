@@ -9,6 +9,23 @@ from lxml import etree
 from sqlalchemy import create_engine, text
 from sqlalchemy.types import String, Float
 
+# Cálculo de fechas independientes
+_hoy_ext = datetime.now()
+_mes_actual_inicio = _hoy_ext.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+# 3PL: Últimos 6 meses (Mes actual cuenta como 1, restamos 5)
+_inicio_3pl = _mes_actual_inicio - relativedelta(months=5)
+fecha_inicio_3pl = _inicio_3pl.strftime("%Y-%m-%dT00:00:00")
+
+# Órdenes: Últimos 7 meses
+_inicio_ordenes = _mes_actual_inicio - relativedelta(months=6)
+fecha_inicio_ordenes = _inicio_ordenes.strftime("%Y-%m-%dT00:00:00")
+fecha_fiscal_ordenes = _inicio_ordenes.strftime("%Y-%m")
+
+# Entrega de Mercancía: Últimos 2 meses (mes actual + anterior)
+_inicio_entrega = _mes_actual_inicio - relativedelta(months=1)
+fecha_inicio_entrega = _inicio_entrega.strftime("%Y-%m-%dT00:00:00")
+
 # ========= CARGA VARIABLES ENTORNO =========
 load_dotenv()
 
@@ -312,8 +329,8 @@ ODATA_ORDENES_URL = (
     "KCZ5F74283906DBF4CD07A5CA,KCZFA7C12055DC98403D10CAA,"
     "KCZC4CE47BAD42C81EA5B0D0F,KCZ998098F004AB32E2511CF5,"
     "KCZ95857413FCAF0B77113DCF"
-    "&$filter=(CFISCALDDATES6F44DC8D81C7C41F ge '2025-01') "
-    "and (CDOC_CREATED_DT ge datetime'2025-01-01T00:00:00')"
+    f"&$filter=(CFISCALDDATES6F44DC8D81C7C41F ge '{fecha_fiscal_ordenes}') "
+    f"and (CDOC_CREATED_DT ge datetime'{fecha_inicio_ordenes}')" # <-- Aquí usamos la otra variable dinámica
     "&$top=15000"
 )
 
@@ -363,17 +380,25 @@ def extraer_ordenes() -> pd.DataFrame:
 
 def cargar_ordenes(df: pd.DataFrame) -> None:
     engine = get_engine()
+
+    dtype_map_ordenes = {
+        "FiscalMonthYear": String(10),
+        "Customer": String(20),
+        "Sales Order": String(20)
+    }
+
     with engine.begin() as conn:
         df.to_sql(
             name="sap_byd_ordenes",
             con=conn,
-            if_exists="replace",   # siempre reemplaza
+            if_exists="replace",
             index=False,
+            dtype=dtype_map_ordenes,
             method="multi",
             chunksize=1000
         )
     engine.dispose()
-    print(f"✅ Órdenes cargadas en sap_byd_ordenes ({len(df)} filas)")
+    print(f"✅ Órdenes cargadas en sap_byd_ordenes ({len(df)} filas, replace completo)")
 
 # ========= ODATA COSTO PRODUCTO =========
 ODATA_COSTO_URL = (
@@ -428,13 +453,17 @@ def cargar_costo_producto(df: pd.DataFrame) -> None:
 
 # ========= ODATA 3PL Y ENTREGA DE MERCANCÍA =========
 
+print(f"📅 Ventana 3PL: Desde {fecha_inicio_3pl}")
+print(f"📅 Ventana Entrega: Desde {fecha_inicio_entrega}")
+
 URL_BASE_3PL = (
     "https://my336154.sapbydesign.com/sap/byd/odata/"
     "cc_home_analytics.svc/"
     "RPZ8FD31E1E09C6489CFC1FE8QueryResults"
 )
 SELECT_3PL = "CRELEASE_STATUS,TRELEASE_STATUS,CBUSINEERENCEF1ACB9534604A4D9,CRELEASERENCE79EA4F7FDF174CDF,CSTATUSERENCE8E2BEDA58262A7C0,TSTATUSERENCE8E2BEDA58262A7C0,CIDCONTERENCEFD3F50267033877F,CPRODUCERENCE961D56D7A61936A0,KCREQUESERENCEE7C71585BF4BFCEE,CBUSINEERENCEBC7B6311A522DAAC"
-FILTER_3PL = "(CBUSINEERENCEBC7B6311A522DAAC eq '114') and (CRELEASERENCE79EA4F7FDF174CDF ge datetime'2025-12-01T00:00:00')"
+# Usamos fecha_inicio_3pl
+FILTER_3PL = f"(CBUSINEERENCEBC7B6311A522DAAC eq '114') and (CRELEASERENCE79EA4F7FDF174CDF ge datetime'{fecha_inicio_3pl}')"
 
 
 URL_BASE_ENTREGA = (
@@ -443,19 +472,16 @@ URL_BASE_ENTREGA = (
     "RPZ4E72B90D164D5C8BA4A7E9QueryResults"
 )
 SELECT_ENTREGA = "CID_TRANSPORTADORA_01,CID_UBICACION_01,CID_VERIFICACION_01,CID_VEHICULO_01,CID_FECHAPRIMERACITA,CID_CAJAS_01,CID_CITAS_ADICIONAL_01,CID_CITAS_01,CID_CONDUCTOR_01,CID_CSAP_01,CID_CUMPLIMIENTO_01,CID_DIAS_ENTREGA_01,CID_DIAS_SBD_01,CID_ENTREGA_01,CID_ESTADO_01,CID_FE_01,CID_FECHA_ENTREGA_01,CID_FECHATRANSDESTINO,CID_FGUIA_01,CID_GUIA_01,CID_HORA_ENTREGA_01,CID_HUACALES_01,CID_INDICADOR_01,CID_MENTREGA_01,CID_MOTIVOATRASO,CID_NOMBRE_ENTREGA_01,CID_NOMBRE_RECIBE_01,CID_NOVEDAD_01,CIBR_SLO_UUID,CID_PLACAS_01,CID_PROM_SERVICIO_01,CID_RCSAP_01,CDOC_INV_DATE"
-FILTER_ENTREGA = "(CDOC_INV_DATE ge datetime'2025-12-01T00:00:00')"
+# Usamos fecha_inicio_entrega
+FILTER_ENTREGA = f"(CDOC_INV_DATE ge datetime'{fecha_inicio_entrega}')"
 
 
 def extraer_odata_paginado(nombre_proceso: str, url_base: str, select: str, filter_str: str, batch_size: int = 5000) -> pd.DataFrame:
-    """
-    Función genérica para extraer todos los registros de SAP ByD paginando de a batch_size.
-    """
     print(f"\nExtrayendo OData paginado: {nombre_proceso}...")
     all_batches = []
     skip = 0
 
     while True:
-        
         url = f"{url_base}?$select={select}&$filter={filter_str}&$top={batch_size}&$skip={skip}"
         print(f"  -> Obteniendo batch (skip={skip})...")
         
@@ -463,7 +489,6 @@ def extraer_odata_paginado(nombre_proceso: str, url_base: str, select: str, filt
         resp.raise_for_status()
 
         try:
-        
             df_batch = pd.read_xml(
                 resp.content,
                 xpath=".//atom:entry/atom:content/m:properties",
@@ -479,7 +504,6 @@ def extraer_odata_paginado(nombre_proceso: str, url_base: str, select: str, filt
         all_batches.append(df_batch)
         print(f"     {len(df_batch)} filas en este batch.")
 
-      
         if len(df_batch) < batch_size:
             break
             
@@ -493,22 +517,19 @@ def extraer_odata_paginado(nombre_proceso: str, url_base: str, select: str, filt
         print(f"⚠️ No se encontraron datos para {nombre_proceso}.")
         return pd.DataFrame()
 
-def cargar_tabla_simple(df: pd.DataFrame, nombre_tabla: str) -> None:
-    """
-    Carga un DataFrame directamente a una tabla nueva en PostgreSQL (Reemplaza la existente).
-    """
+def cargar_replace(df: pd.DataFrame, nombre_tabla: str) -> None:
     engine = get_engine()
     with engine.begin() as conn:
         df.to_sql(
             name=nombre_tabla,
             con=conn,
-            if_exists="replace",  # Crea la tabla desde cero cada vez
+            if_exists="replace",
             index=False,
             method="multi",
             chunksize=1000
         )
     engine.dispose()
-    print(f"✅ Datos cargados en PostgreSQL -> Tabla: {nombre_tabla} ({len(df)} filas)")
+    print(f"✅ {nombre_tabla} cargada ({len(df)} filas, replace completo)")
 
 
 # ========= MAIN =========
@@ -536,16 +557,16 @@ if __name__ == "__main__":
 
     # ================= NUEVO: 3PL y Entrega de Mercancía =================
     
-    # 4) 3PL
+    # 4) 3PL (últimos 6 meses, replace completo)
     df_3pl = extraer_odata_paginado("3PL", URL_BASE_3PL, SELECT_3PL, FILTER_3PL)
     if not df_3pl.empty:
-        cargar_tabla_simple(df_3pl, "sap_byd_3pl")
+        cargar_replace(df_3pl, "sap_byd_3pl")
     else:
         print("⚠️ OData de 3PL sin datos.")
 
-    # 5) Entrega de Mercancía
+    # 5) Entrega de Mercancía (últimos 2 meses, replace completo)
     df_entrega = extraer_odata_paginado("Entrega de Mercancía", URL_BASE_ENTREGA, SELECT_ENTREGA, FILTER_ENTREGA)
     if not df_entrega.empty:
-        cargar_tabla_simple(df_entrega, "sap_byd_entrega_mercancia")
+        cargar_replace(df_entrega, "sap_byd_entrega_mercancia")
     else:
         print("⚠️ OData de Entrega de Mercancía sin datos.")
