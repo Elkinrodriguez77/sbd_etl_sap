@@ -2,13 +2,11 @@ name: ETL BYD Ventas
 
 on:
   schedule:
-    # 12:00 pm Colombia (UTC-5) -> 17:00 UTC, todos los días
+    # 12:00 PM Colombia (UTC-5) -> 17:00 UTC
     - cron: '0 17 * * *'
-    # 2:30 pm Colombia -> 19:30 UTC, todos los días
-    - cron: '30 19 * * *'
-    # 7:00 pm Colombia -> 00:00 UTC del día siguiente, todos los días
-    - cron: '0 0 * * *'
-  workflow_dispatch:  # Permite ejecutarlo manualmente desde GitHub
+    # 11:00 PM Colombia (UTC-5) -> 04:00 UTC (del día siguiente)
+    - cron: '0 4 * * *'
+  workflow_dispatch: # Mantiene la opción de ejecución manual
 
 jobs:
   run-etl:
