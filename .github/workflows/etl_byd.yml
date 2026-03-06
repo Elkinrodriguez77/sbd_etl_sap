@@ -2,10 +2,12 @@ name: ETL BYD Ventas
 
 on:
   schedule:
+    # 3:00 AM Colombia (UTC-5) -> 08:00 UTC
+    - cron: '0 8 * * *'
     # 12:00 PM Colombia (UTC-5) -> 17:00 UTC
     - cron: '0 17 * * *'
-    # 11:00 PM Colombia (UTC-5) -> 04:00 UTC (del día siguiente)
-    - cron: '0 4 * * *'
+    # 8:00 PM Colombia (UTC-5) -> 01:00 UTC (del día siguiente)
+    - cron: '0 1 * * *'
   workflow_dispatch: # Mantiene la opción de ejecución manual
 
 jobs:
