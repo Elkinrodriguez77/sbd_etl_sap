@@ -328,9 +328,10 @@ ODATA_ORDENES_URL = (
     "KCZ99DCD133A13F9D1408CD69,KCZF14889264B14B86AC3BFDE,"
     "KCZ5F74283906DBF4CD07A5CA,KCZFA7C12055DC98403D10CAA,"
     "KCZC4CE47BAD42C81EA5B0D0F,KCZ998098F004AB32E2511CF5,"
-    "KCZ95857413FCAF0B77113DCF"
+    "KCZ95857413FCAF0B77113DCF,C1ITM_UUIDsDOC_S_APPROVAL,"
+    "T1ITM_UUIDsDOC_S_APPROVAL"
     f"&$filter=(CFISCALDDATES6F44DC8D81C7C41F ge '{fecha_fiscal_ordenes}') "
-    f"and (CDOC_CREATED_DT ge datetime'{fecha_inicio_ordenes}')" # <-- Aquí usamos la otra variable dinámica
+    f"and (CDOC_CREATED_DT ge datetime'{fecha_inicio_ordenes}')"
     "&$top=15000"
 )
 
@@ -371,6 +372,8 @@ def extraer_ordenes() -> pd.DataFrame:
         "KCZB8AFD00C36F845A6715442": "Valor Confirmado",
         "KCZ998098F004AB32E2511CF5": "Qty Confirmada",
         "KCZB6013F9BB1AA840E860741": "Qty Facturada",
+        "C1ITM_UUIDsDOC_S_APPROVAL": "posicion_prod1",
+        "T1ITM_UUIDsDOC_S_APPROVAL": "posicion_prod2",
     }
     df = df.rename(columns=rename_map)
 
