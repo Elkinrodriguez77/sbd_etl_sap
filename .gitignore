@@ -11,5 +11,6 @@ __pycache__/
 .sbd/
 sbd/
 test_nuevas_tablas.py
+test_etl_full.py
 
 
