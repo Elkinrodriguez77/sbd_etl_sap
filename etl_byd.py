@@ -534,6 +534,91 @@ def cargar_replace(df: pd.DataFrame, nombre_tabla: str) -> None:
     engine.dispose()
     print(f"✅ {nombre_tabla} cargada ({len(df)} filas, replace completo)")
 
+# ========= ODATA INVENTARIO DISPONIBLE =========
+
+ODATA_INVENTARIO_URL = (
+    "https://my336154.sapbydesign.com/sap/byd/odata/"
+    "cc_home_analytics.svc/"
+    "RPZ090ACC34E23590E4C2D25DQueryResults"
+    "?$select=CPRODUCT_ID,KCZDF91AEE1AD2B1DE80EEC9B"
+    "&$filter=PAR_SEL_SPA_ID eq '250' and PAR_SEL_CATEGORY eq '14' and KCZDF91AEE1AD2B1DE80EEC9B ne 0"
+    "&$top=50000"
+)
+
+
+def extraer_inventario_disponible() -> pd.DataFrame:
+    print("Extrayendo OData de inventario disponible...")
+    all_batches = []
+    skip = 0
+    batch_size = 50000
+
+    while True:
+        url = ODATA_INVENTARIO_URL + "&$skip={}".format(skip)
+        print("  -> Batch (skip={})...".format(skip))
+
+        resp = requests.get(url, auth=(BJD_USER, BJD_PASS), timeout=300)
+        resp.raise_for_status()
+
+        root = etree.fromstring(resp.content)
+        entries = root.findall("atom:entry", ns)
+
+        if not entries:
+            print("  Sin más datos.")
+            break
+
+        rows = []
+        for entry in entries:
+            props = entry.find("atom:content/m:properties", ns)
+            if props is None:
+                continue
+            rows.append({
+                "Product":              props.findtext("d:CPRODUCT_ID",                   default="", namespaces=ns),
+                "Inventario_Disponible": props.findtext("d:KCZDF91AEE1AD2B1DE80EEC9B",   default="0", namespaces=ns),
+            })
+
+        df_batch = pd.DataFrame(rows)
+        print("     {} filas.".format(len(df_batch)))
+        all_batches.append(df_batch)
+
+        if len(entries) < batch_size:
+            break
+
+        skip += batch_size
+
+    if not all_batches:
+        print("Sin datos de inventario.")
+        return pd.DataFrame()
+
+    df = pd.concat(all_batches, ignore_index=True)
+
+    # Convertir a numérico y filtro defensivo por si SAP igual devuelve algún 0
+    df["Inventario_Disponible"] = pd.to_numeric(df["Inventario_Disponible"], errors="coerce").fillna(0)
+    df = df[df["Inventario_Disponible"] != 0].reset_index(drop=True)
+
+    print("Total inventario disponible: {} productos".format(len(df)))
+    return df
+
+
+def cargar_inventario_disponible(df: pd.DataFrame) -> None:
+    engine = get_engine()
+
+    dtype_map = {
+        "Product":               String(40),
+        "Inventario_Disponible": Float,
+    }
+
+    with engine.begin() as conn:
+        df.to_sql(
+            name="sap_byd_inventario_disponible",
+            con=conn,
+            if_exists="replace",   # replace completo cada vez
+            index=False,
+            dtype=dtype_map,
+            method="multi",
+            chunksize=1000
+        )
+    engine.dispose()
+    print("Inventario cargado en sap_byd_inventario_disponible ({} filas)".format(len(df)))
 
 # ========= MAIN =========
 if __name__ == "__main__":
@@ -573,3 +658,10 @@ if __name__ == "__main__":
         cargar_replace(df_entrega, "sap_byd_entrega_mercancia")
     else:
         print("⚠️ OData de Entrega de Mercancía sin datos.")
+
+    # 6) Inventario Disponible
+    df_inventario = extraer_inventario_disponible()
+    if not df_inventario.empty:
+        cargar_inventario_disponible(df_inventario)
+    else:
+        print("Sin datos de inventario disponible.")
